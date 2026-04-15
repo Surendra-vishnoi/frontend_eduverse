@@ -1,24 +1,76 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { setToken, setRefreshToken } from "@/lib/api";
+import { setToken, setRefreshToken, type User } from "@/lib/api";
 import { Loader2 } from "lucide-react";
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://eduverse-4x8o.onrender.com";
 
 function CallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { login } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const hasHandledCallback = useRef(false);
+
+  const completeAuth = async (accessToken: string, refreshToken: string | null, user: User | null) => {
+    setToken(accessToken);
+    if (refreshToken) {
+      setRefreshToken(refreshToken);
+    }
+
+    await login(accessToken, user);
+
+    // Remove callback query/hash artifacts from browser history.
+    window.history.replaceState({}, document.title, window.location.pathname);
+    router.replace("/dashboard");
+  };
+
+  const exchangeCodeForToken = async (code: string, state: string) => {
+    const callbackUrl = `${BACKEND_URL}/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}&response_mode=json`;
+    const response = await fetch(callbackUrl, {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const fallbackMessage = `Authentication failed with status ${response.status}`;
+      let detail = fallbackMessage;
+      try {
+        const data = await response.json();
+        detail = data?.detail || fallbackMessage;
+      } catch {
+        // Keep fallback message.
+      }
+      throw new Error(detail);
+    }
+
+    const data = await response.json();
+    if (!data?.access_token) {
+      throw new Error("Authentication response missing access token");
+    }
+
+    await completeAuth(data.access_token, data.refresh_token || null, data.user || null);
+  };
 
   useEffect(() => {
+    if (hasHandledCallback.current) {
+      return;
+    }
+
+    hasHandledCallback.current = true;
+
     const handleCallback = async () => {
-      // Check for tokens in URL hash (fragment)
-      const hash = window.location.hash.substring(1);
+      // Preferred flow: backend redirects to frontend with token fragment.
+      const hash = window.location.hash.replace(/^#/, "");
       const hashParams = new URLSearchParams(hash);
-      
-      // Check for tokens in query params
+
+      // Accept token payload from either hash or query.
       const accessToken = searchParams.get("access_token") || hashParams.get("access_token");
       const refreshToken = searchParams.get("refresh_token") || hashParams.get("refresh_token");
       const userParam = searchParams.get("user") || hashParams.get("user");
@@ -33,30 +85,34 @@ function CallbackHandler() {
         try {
           let user = null;
           if (userParam) {
-            user = JSON.parse(decodeURIComponent(userParam));
-          }
-          
-          // Store the tokens using the API helper
-          setToken(accessToken);
-          if (refreshToken) {
-            setRefreshToken(refreshToken);
+            user = JSON.parse(userParam);
           }
 
-          // Update auth context
-          await login(accessToken, user);
-          
-          // Redirect to dashboard
-          router.push("/dashboard");
+          await completeAuth(accessToken, refreshToken, user);
         } catch (err) {
           console.error("Error processing auth callback:", err);
           setError("Failed to process authentication");
         }
-      } else {
-        setError("No authentication token received. Please try logging in again.");
+        return;
       }
+
+      // Legacy fallback: if callback has code/state, exchange for tokens.
+      const code = searchParams.get("code");
+      const state = searchParams.get("state");
+      if (code && state) {
+        try {
+          await exchangeCodeForToken(code, state);
+        } catch (err) {
+          console.error("Error exchanging code for token:", err);
+          setError(err instanceof Error ? err.message : "Failed to complete authentication");
+        }
+        return;
+      }
+
+      setError("No authentication token received. Please try logging in again.");
     };
 
-    handleCallback();
+    void handleCallback();
   }, [searchParams, login, router]);
 
   if (error) {

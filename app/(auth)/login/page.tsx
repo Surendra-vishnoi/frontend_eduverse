@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { GraduationCap, ArrowRight, KeyRound } from "lucide-react";
+import { GraduationCap, ArrowRight } from "lucide-react";
 import { authApi } from "@/lib/api";
 
 export default function LoginPage() {
@@ -59,35 +59,13 @@ export default function LoginPage() {
               <ArrowRight className="w-4 h-4 ml-auto" />
             </Button>
 
-            <div className="relative my-2">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-border"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-card text-muted-foreground">or</span>
-              </div>
-            </div>
-
-            {/* Token Login Option */}
-            <Link href="/token-login" className="block">
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full h-11 gap-2"
-              >
-                <KeyRound className="w-4 h-4" />
-                Paste Login Token
-              </Button>
-            </Link>
-
             {/* Help Text */}
             <div className="bg-muted/50 p-4 rounded-lg text-sm space-y-2 mt-4">
               <p className="font-medium text-card-foreground">How to sign in:</p>
               <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
                 <li>Click <strong>&quot;Continue with Google&quot;</strong> above</li>
                 <li>Complete Google authentication</li>
-                <li>If you see a JSON response, copy it and use <strong>&quot;Paste Login Token&quot;</strong></li>
-                <li>Otherwise, you&apos;ll be redirected automatically</li>
+                <li>You&apos;ll be redirected back and signed in automatically</li>
               </ol>
             </div>
           </CardContent>

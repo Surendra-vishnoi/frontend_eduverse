@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API_BASE_URL = "https://eduverse-4x8o.onrender.com";
+const API_BASE_URL =
+  process.env.BACKEND_URL ||
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  "https://eduverse-4x8o.onrender.com";
 
 export async function GET(
   request: NextRequest,

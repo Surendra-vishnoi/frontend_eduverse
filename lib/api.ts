@@ -1,4 +1,5 @@
-const BACKEND_URL = "https://eduverse-4x8o.onrender.com";
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || "https://eduverse-4x8o.onrender.com";
 // Use proxy to avoid CORS issues
 const API_BASE_URL = typeof window !== "undefined" ? "/api/proxy" : BACKEND_URL;
 
@@ -465,12 +466,12 @@ export const authApi = {
   },
 
   // Backend supports Google OAuth only.
-  login: async (_email: string, _password: string) => {
+  login: async (_email: string, _password: string): Promise<{ access_token: string }> => {
     throw new Error("Email/password login is not supported. Please use Google login.");
   },
 
   // Backend supports Google OAuth only.
-  register: async (_email: string, _password: string, _name: string) => {
+  register: async (_email: string, _password: string, _name: string): Promise<{ access_token: string }> => {
     throw new Error("Registration is handled through Google login.");
   },
 
