@@ -65,6 +65,20 @@ export interface ChatQueryResponse {
   sources_used?: number;
 }
 
+export interface ChatStreamEvent {
+  type: "answer" | "tool_call" | "tool_result" | "citations";
+  content?: string;
+  tool?: string;
+  args?: string;
+  citations?: Array<string | ChatCitation>;
+}
+
+interface ChatStreamCallbacks {
+  onAnswer?: (delta: string, fullAnswer: string) => void;
+  onEvent?: (event: ChatStreamEvent) => void;
+  signal?: AbortSignal;
+}
+
 export interface ChatSession {
   id: string;
   course_id?: string;
@@ -675,6 +689,182 @@ export const chatApi = {
       },
       true // Include Groq API key
     );
+  },
+
+  // Send a question and stream response via SSE
+  queryStream: async (
+    question: string,
+    sessionId?: string,
+    courseId?: string,
+    callbacks?: ChatStreamCallbacks
+  ): Promise<ChatQueryResponse> => {
+    const payload: Record<string, string> = { question };
+    if (sessionId) {
+      payload.session_id = sessionId;
+    }
+    if (courseId) {
+      payload.course_id = courseId;
+    }
+
+    const parseError = async (response: Response) => {
+      let detail = `Request failed with status ${response.status}`;
+      try {
+        const errorText = await response.text();
+        if (errorText) {
+          try {
+            const errorJson = JSON.parse(errorText);
+            detail = errorJson.detail || errorJson.message || errorText;
+          } catch {
+            detail = errorText;
+          }
+        }
+      } catch {
+        // Keep default detail.
+      }
+      throw new ApiRequestError(detail, response.status, "/chat/query/stream");
+    };
+
+    const readStream = async (retryOnAuthFailure = true): Promise<ChatQueryResponse> => {
+      let token = getToken();
+
+      if (!token && retryOnAuthFailure) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          token = getToken();
+        }
+      }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+
+      const groqKey = getGroqKey();
+      if (groqKey) {
+        headers["X-Groq-Api-Key"] = groqKey;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/chat/query/stream`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        signal: callbacks?.signal,
+      });
+
+      if (response.status === 401 && retryOnAuthFailure) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          return readStream(false);
+        }
+        removeToken();
+      }
+
+      if (!response.ok) {
+        await parseError(response);
+      }
+
+      if (!response.body) {
+        throw new ApiRequestError("Streaming response has no body", 500, "/chat/query/stream");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      let buffer = "";
+      let doneSignal = false;
+      let fullAnswer = "";
+      let citations: Array<string | ChatCitation> = [];
+
+      const applyAnswerUpdate = (nextContent: string) => {
+        if (!nextContent) {
+          return;
+        }
+
+        if (nextContent === fullAnswer) {
+          return;
+        }
+
+        if (nextContent.startsWith(fullAnswer)) {
+          const delta = nextContent.slice(fullAnswer.length);
+          fullAnswer = nextContent;
+          if (delta) {
+            callbacks?.onAnswer?.(delta, fullAnswer);
+          }
+          return;
+        }
+
+        fullAnswer += nextContent;
+        callbacks?.onAnswer?.(nextContent, fullAnswer);
+      };
+
+      while (!doneSignal) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+
+        while (true) {
+          const boundary = buffer.indexOf("\n\n");
+          if (boundary === -1) {
+            break;
+          }
+
+          const rawEvent = buffer.slice(0, boundary).trim();
+          buffer = buffer.slice(boundary + 2);
+
+          if (!rawEvent) {
+            continue;
+          }
+
+          const dataLines = rawEvent
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.startsWith("data:"));
+
+          if (!dataLines.length) {
+            continue;
+          }
+
+          const dataPayload = dataLines
+            .map((line) => line.slice(5).trim())
+            .join("\n");
+
+          if (dataPayload === "[DONE]") {
+            doneSignal = true;
+            break;
+          }
+
+          try {
+            const event = JSON.parse(dataPayload) as ChatStreamEvent;
+            callbacks?.onEvent?.(event);
+
+            if (event.type === "answer" && typeof event.content === "string") {
+              applyAnswerUpdate(event.content);
+            } else if (event.type === "citations" && Array.isArray(event.citations)) {
+              citations = event.citations;
+            }
+          } catch {
+            // Ignore malformed SSE chunks and continue.
+          }
+        }
+      }
+
+      const finalAnswer = fullAnswer.trim() ? fullAnswer : "No response received";
+
+      return {
+        answer: finalAnswer,
+        citations,
+        session_id: response.headers.get("X-Session-Id") || sessionId,
+        sources_used: citations.length,
+      };
+    };
+
+    return readStream(true);
   },
 
   // Get all chat sessions

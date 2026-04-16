@@ -97,6 +97,28 @@ async function handleProxy(
 
     // Get response data
     const responseContentType = response.headers.get("Content-Type");
+
+    if (responseContentType?.includes("text/event-stream")) {
+      const streamHeaders = new Headers();
+      streamHeaders.set("Content-Type", "text/event-stream");
+      streamHeaders.set(
+        "Cache-Control",
+        response.headers.get("Cache-Control") || "no-cache"
+      );
+      streamHeaders.set("Connection", "keep-alive");
+
+      const sessionId =
+        response.headers.get("X-Session-Id") ||
+        response.headers.get("x-session-id");
+      if (sessionId) {
+        streamHeaders.set("X-Session-Id", sessionId);
+      }
+
+      return new NextResponse(response.body, {
+        status: response.status,
+        headers: streamHeaders,
+      });
+    }
     
     if (responseContentType?.includes("application/json")) {
       const data = await response.json();

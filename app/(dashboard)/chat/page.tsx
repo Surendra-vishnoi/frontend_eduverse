@@ -163,7 +163,8 @@ function ChatContent() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || !selectedCourse) return;
+    const question = input.trim();
+    if (!question || !selectedCourse) return;
 
     const key = getGroqKey();
     if (!key) {
@@ -171,21 +172,47 @@ function ChatContent() {
       return;
     }
 
-    const userMessage: ChatMessage = { role: "user", content: input };
+    const userMessage: ChatMessage = { role: "user", content: question };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsSending(true);
 
     try {
-      const response = await chatApi.query(input, currentSessionId || undefined, selectedCourse || undefined);
+      // Add an assistant placeholder that gets filled progressively as stream events arrive.
+      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+
+      const response = await chatApi.queryStream(
+        question,
+        currentSessionId || undefined,
+        selectedCourse || undefined,
+        {
+          onAnswer: (_delta, fullAnswer) => {
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+
+              if (!last || last.role !== "assistant") {
+                next.push({ role: "assistant", content: fullAnswer });
+                return next;
+              }
+
+              next[next.length - 1] = {
+                ...last,
+                content: fullAnswer,
+              };
+              return next;
+            });
+          },
+        }
+      );
 
       if (response && typeof response === "object" && response.session_id) {
         setCurrentSessionId(response.session_id);
       }
-      
+
       let messageContent = "No response received";
       let citations: ChatMessage["citations"] = [];
-      
+
       if (typeof response === "string") {
         messageContent = response;
       } else if (response && typeof response === "object") {
@@ -193,26 +220,91 @@ function ChatContent() {
         citations = Array.isArray(response.citations) ? response.citations : [];
       }
 
-      const assistantMessage: ChatMessage = {
-        role: "assistant",
-        content: messageContent,
-        citations: citations,
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+
+        if (last?.role === "assistant") {
+          next[next.length - 1] = {
+            ...last,
+            content: last.content || messageContent,
+            citations,
+          };
+          return next;
+        }
+
+        next.push({
+          role: "assistant",
+          content: messageContent,
+          citations,
+        });
+        return next;
+      });
 
       // Refresh sessions list
       fetchSessions();
-    } catch (error) {
-      console.error("[v0] Chat error:", error);
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      toast.error(errorMessage);
-      // Remove the user message if failed
-      setMessages((prev) => prev.slice(0, -1));
-      setInput(input);
+    } catch (streamError) {
+      console.warn("[chat] Stream failed, falling back to one-shot response", streamError);
 
-      // If it's an API key error, show the dialog
-      if (errorMessage.toLowerCase().includes("api key") || errorMessage.toLowerCase().includes("groq")) {
-        setShowApiKeyDialog(true);
+      // Remove in-progress assistant bubble (if any) before fallback.
+      setMessages((prev) => {
+        const next = [...prev];
+        if (next[next.length - 1]?.role === "assistant") {
+          next.pop();
+        }
+        return next;
+      });
+
+      try {
+        const response = await chatApi.query(
+          question,
+          currentSessionId || undefined,
+          selectedCourse || undefined
+        );
+
+        if (response && typeof response === "object" && response.session_id) {
+          setCurrentSessionId(response.session_id);
+        }
+
+        let messageContent = "No response received";
+        let citations: ChatMessage["citations"] = [];
+
+        if (typeof response === "string") {
+          messageContent = response;
+        } else if (response && typeof response === "object") {
+          messageContent =
+            response.answer ||
+            response.response ||
+            response.message ||
+            response.content ||
+            JSON.stringify(response);
+          citations = Array.isArray(response.citations) ? response.citations : [];
+        }
+
+        const assistantMessage: ChatMessage = {
+          role: "assistant",
+          content: messageContent,
+          citations,
+        };
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        fetchSessions();
+      } catch (error) {
+        console.error("[v0] Chat error:", error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        toast.error(errorMessage);
+
+        // Remove the user message if both streaming and fallback failed.
+        setMessages((prev) => prev.slice(0, -1));
+        setInput(question);
+
+        // If it's an API key error, show the dialog.
+        if (
+          errorMessage.toLowerCase().includes("api key") ||
+          errorMessage.toLowerCase().includes("groq")
+        ) {
+          setShowApiKeyDialog(true);
+        }
       }
     } finally {
       setIsSending(false);
@@ -227,6 +319,7 @@ function ChatContent() {
   };
 
   const selectedClassroomData = classrooms.find((c) => c.id === selectedCourse);
+  const isAssistantStreaming = isSending && messages[messages.length - 1]?.role === "assistant";
 
   const getSessionLabel = (session: ChatSession) => {
     if (session.created_at) {
@@ -491,7 +584,7 @@ function ChatContent() {
                       )}
                     </div>
                   ))}
-                  {isSending && (
+                  {isSending && !isAssistantStreaming && (
                     <div className="flex gap-3 justify-start">
                       <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                         <Bot className="w-4 h-4 text-primary" />
