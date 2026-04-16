@@ -67,7 +67,7 @@ export interface ChatQueryResponse {
 
 export interface ChatStreamEvent {
   type: "answer" | "tool_call" | "tool_result" | "citations";
-  content?: string;
+  content?: unknown;
   tool?: string;
   args?: string;
   citations?: Array<string | ChatCitation>;
@@ -778,6 +778,50 @@ export const chatApi = {
       let fullAnswer = "";
       let citations: Array<string | ChatCitation> = [];
 
+      const normalizeAnswerContent = (content: unknown): string => {
+        if (typeof content === "string") {
+          return content;
+        }
+
+        if (Array.isArray(content)) {
+          return content
+            .map((part) => {
+              if (typeof part === "string") {
+                return part;
+              }
+
+              if (part && typeof part === "object") {
+                const block = part as { text?: unknown; content?: unknown };
+                if (typeof block.text === "string") {
+                  return block.text;
+                }
+                if (typeof block.content === "string") {
+                  return block.content;
+                }
+              }
+
+              return "";
+            })
+            .join("");
+        }
+
+        if (content && typeof content === "object") {
+          const block = content as { text?: unknown; content?: unknown };
+          if (typeof block.text === "string") {
+            return block.text;
+          }
+          if (typeof block.content === "string") {
+            return block.content;
+          }
+        }
+
+        if (content == null) {
+          return "";
+        }
+
+        return String(content);
+      };
+
       const applyAnswerUpdate = (nextContent: string) => {
         if (!nextContent) {
           return;
@@ -843,8 +887,8 @@ export const chatApi = {
             const event = JSON.parse(dataPayload) as ChatStreamEvent;
             callbacks?.onEvent?.(event);
 
-            if (event.type === "answer" && typeof event.content === "string") {
-              applyAnswerUpdate(event.content);
+            if (event.type === "answer") {
+              applyAnswerUpdate(normalizeAnswerContent(event.content));
             } else if (event.type === "citations" && Array.isArray(event.citations)) {
               citations = event.citations;
             }
@@ -854,7 +898,11 @@ export const chatApi = {
         }
       }
 
-      const finalAnswer = fullAnswer.trim() ? fullAnswer : "No response received";
+      if (!fullAnswer.trim()) {
+        throw new ApiRequestError("Empty stream response", 502, "/chat/query/stream");
+      }
+
+      const finalAnswer = fullAnswer;
 
       return {
         answer: finalAnswer,
