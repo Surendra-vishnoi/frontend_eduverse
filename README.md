@@ -17,7 +17,9 @@ Primary frontend repository:
 
 - https://github.com/Surendra-vishnoi/frontend_eduverse
 
-Note: There is another similarly named frontend in the workspace. This README is for this repository only.
+Related backend repository:
+
+- https://github.com/Surendra-vishnoi/Eduverse
 
 ## Tech Stack
 
