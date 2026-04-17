@@ -47,6 +47,9 @@ import {
 } from "lucide-react";
 
 function ChatContent() {
+  const STREAM_CHARS_PER_TICK = 5;
+  const STREAM_TICK_MS = 45;
+
   const searchParams = useSearchParams();
   const initialCourse = searchParams.get("course");
 
@@ -61,6 +64,9 @@ function ChatContent() {
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamBufferRef = useRef("");
+  const streamTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const streamDrainResolverRef = useRef<(() => void) | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -69,6 +75,111 @@ function ChatContent() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  const appendAssistantDelta = useCallback((delta: string) => {
+    if (!delta) {
+      return;
+    }
+
+    setMessages((prev) => {
+      const next = [...prev];
+      const last = next[next.length - 1];
+
+      if (!last || last.role !== "assistant") {
+        next.push({ role: "assistant", content: delta });
+        return next;
+      }
+
+      next[next.length - 1] = {
+        ...last,
+        content: `${last.content || ""}${delta}`,
+      };
+      return next;
+    });
+  }, []);
+
+  const resolveStreamDrainIfIdle = useCallback(() => {
+    if (!streamBufferRef.current && !streamTimerRef.current && streamDrainResolverRef.current) {
+      const resolve = streamDrainResolverRef.current;
+      streamDrainResolverRef.current = null;
+      resolve();
+    }
+  }, []);
+
+  const startStreamRenderer = useCallback(() => {
+    if (streamTimerRef.current) {
+      return;
+    }
+
+    streamTimerRef.current = setInterval(() => {
+      if (!streamBufferRef.current) {
+        if (streamTimerRef.current) {
+          clearInterval(streamTimerRef.current);
+          streamTimerRef.current = null;
+        }
+        resolveStreamDrainIfIdle();
+        return;
+      }
+
+      const delta = streamBufferRef.current.slice(0, STREAM_CHARS_PER_TICK);
+      streamBufferRef.current = streamBufferRef.current.slice(STREAM_CHARS_PER_TICK);
+      appendAssistantDelta(delta);
+
+      if (!streamBufferRef.current && streamTimerRef.current) {
+        clearInterval(streamTimerRef.current);
+        streamTimerRef.current = null;
+        resolveStreamDrainIfIdle();
+      }
+    }, STREAM_TICK_MS);
+  }, [appendAssistantDelta, resolveStreamDrainIfIdle]);
+
+  const enqueueStreamDelta = useCallback(
+    (delta: string) => {
+      if (!delta) {
+        return;
+      }
+
+      streamBufferRef.current += delta;
+      startStreamRenderer();
+    },
+    [startStreamRenderer]
+  );
+
+  const stopStreamRenderer = useCallback(
+    (flushRemaining: boolean) => {
+      if (streamTimerRef.current) {
+        clearInterval(streamTimerRef.current);
+        streamTimerRef.current = null;
+      }
+
+      if (flushRemaining && streamBufferRef.current) {
+        const pending = streamBufferRef.current;
+        streamBufferRef.current = "";
+        appendAssistantDelta(pending);
+      } else if (!flushRemaining) {
+        streamBufferRef.current = "";
+      }
+
+      resolveStreamDrainIfIdle();
+    },
+    [appendAssistantDelta, resolveStreamDrainIfIdle]
+  );
+
+  const waitForStreamDrain = useCallback(async () => {
+    if (!streamBufferRef.current && !streamTimerRef.current) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      streamDrainResolverRef.current = resolve;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopStreamRenderer(false);
+    };
+  }, [stopStreamRenderer]);
 
   // Check if Groq API key is set
   useEffect(() => {
@@ -173,6 +284,7 @@ function ChatContent() {
     }
 
     const userMessage: ChatMessage = { role: "user", content: question };
+  stopStreamRenderer(false);
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsSending(true);
@@ -186,22 +298,8 @@ function ChatContent() {
         currentSessionId || undefined,
         selectedCourse || undefined,
         {
-          onAnswer: (_delta, fullAnswer) => {
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-
-              if (!last || last.role !== "assistant") {
-                next.push({ role: "assistant", content: fullAnswer });
-                return next;
-              }
-
-              next[next.length - 1] = {
-                ...last,
-                content: fullAnswer,
-              };
-              return next;
-            });
+          onAnswer: (delta) => {
+            enqueueStreamDelta(delta);
           },
         }
       );
@@ -241,10 +339,13 @@ function ChatContent() {
         return next;
       });
 
+      await waitForStreamDrain();
+
       // Refresh sessions list
       fetchSessions();
     } catch (streamError) {
       console.warn("[chat] Stream failed, falling back to one-shot response", streamError);
+      stopStreamRenderer(false);
 
       // Remove in-progress assistant bubble (if any) before fallback.
       setMessages((prev) => {
@@ -307,6 +408,7 @@ function ChatContent() {
         }
       }
     } finally {
+      stopStreamRenderer(true);
       setIsSending(false);
     }
   };
