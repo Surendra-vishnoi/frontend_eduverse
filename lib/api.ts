@@ -2,8 +2,6 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "https://eduverse-4x8o.onrender.com";
 // Use proxy to avoid CORS issues
 const API_BASE_URL = typeof window !== "undefined" ? "/api/proxy" : BACKEND_URL;
-const LEGACY_BEARER_FALLBACK_ENABLED =
-  (process.env.NEXT_PUBLIC_AUTH_BEARER_FALLBACK_ENABLED || "false").toLowerCase() === "true";
 
 // Types
 export interface User {
@@ -148,19 +146,6 @@ export class ApiRequestError extends Error {
   }
 }
 
-function normalizeToken(token: string | null | undefined): string | null {
-  if (!token) {
-    return null;
-  }
-
-  const trimmed = token.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  return trimmed.replace(/^Bearer\s+/i, "");
-}
-
 function normalizeIndexingStatus(status: unknown): FileItem["indexing_status"] {
   const normalized = String(status ?? "").toLowerCase();
   if (normalized === "processing") return "processing";
@@ -284,39 +269,6 @@ function mapChatRole(role: string): "user" | "assistant" {
   return role === "human" || role === "user" ? "user" : "assistant";
 }
 
-// Token management
-export function getToken(): string | null {
-  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
-    return normalizeToken(localStorage.getItem("eduverse_token"));
-  }
-  return null;
-}
-
-export function setToken(token: string): void {
-  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
-    const normalizedToken = normalizeToken(token);
-    if (normalizedToken) {
-      localStorage.setItem("eduverse_token", normalizedToken);
-    }
-  }
-}
-
-export function getRefreshToken(): string | null {
-  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
-    return normalizeToken(localStorage.getItem("eduverse_refresh_token"));
-  }
-  return null;
-}
-
-export function setRefreshToken(token: string): void {
-  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
-    const normalizedToken = normalizeToken(token);
-    if (normalizedToken) {
-      localStorage.setItem("eduverse_refresh_token", normalizedToken);
-    }
-  }
-}
-
 export function removeToken(): void {
   if (typeof window !== "undefined") {
     localStorage.removeItem("eduverse_token");
@@ -355,37 +307,15 @@ async function parseResponseBody<T>(response: Response): Promise<T> {
 let refreshInFlight: Promise<boolean> | null = null;
 
 async function refreshAccessToken(): Promise<boolean> {
-  const refreshToken = getRefreshToken();
-
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
-        const refreshPayload = refreshToken ? { refresh_token: refreshToken } : {};
         const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
           credentials: "include",
-          body: JSON.stringify(refreshPayload),
         });
 
-        if (!response.ok) {
-          return false;
-        }
-
-        const data = await parseResponseBody<{ access_token?: string; refresh_token?: string }>(response);
-
-        if (!data.access_token) {
-          return false;
-        }
-
-        setToken(data.access_token);
-        if (data.refresh_token) {
-          setRefreshToken(data.refresh_token);
-        }
-
-        return true;
+        return response.ok;
       } catch {
         return false;
       } finally {
@@ -404,21 +334,7 @@ async function apiFetch<T>(
   includeGroqKey = false,
   retryOnAuthFailure = true
 ): Promise<T> {
-  let token = getToken();
-
-  // If access token is missing but refresh token exists, recover before the first request.
-  if (!token && retryOnAuthFailure && endpoint !== "/auth/refresh") {
-    const refreshed = await refreshAccessToken();
-    if (refreshed) {
-      token = getToken();
-    }
-  }
-
   const headers: Record<string, string> = {};
-
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
 
   if (includeGroqKey) {
     const groqKey = getGroqKey();
@@ -494,11 +410,9 @@ export const authApi = {
   },
 
   // Refresh access token
-  refresh: async (refreshToken?: string) => {
-    const payload = refreshToken ? { refresh_token: refreshToken } : {};
-    return apiFetch<{ access_token: string; refresh_token: string }>("/auth/refresh", {
+  refresh: async () => {
+    return apiFetch<{ message: string }>("/auth/refresh", {
       method: "POST",
-      body: JSON.stringify(payload),
     });
   },
 
@@ -733,22 +647,9 @@ export const chatApi = {
     };
 
     const readStream = async (retryOnAuthFailure = true): Promise<ChatQueryResponse> => {
-      let token = getToken();
-
-      if (!token && retryOnAuthFailure) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          token = getToken();
-        }
-      }
-
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
-
-      if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-      }
 
       const groqKey = getGroqKey();
       if (groqKey) {

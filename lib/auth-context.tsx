@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { authApi, User, setToken, removeToken } from "./api";
+import { authApi, User, removeToken } from "./api";
 
 interface AuthContextType {
   user: User | null;
@@ -38,10 +38,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (emailOrToken: string, passwordOrUser?: string | User | null) => {
     // Check if this is a token-based login (from OAuth callback)
     if (typeof passwordOrUser === "object" || passwordOrUser === null || passwordOrUser === undefined) {
-      // Token-based login
-      if (emailOrToken.trim()) {
-        setToken(emailOrToken);
-      }
       if (passwordOrUser && typeof passwordOrUser === "object") {
         setUser(passwordOrUser as User);
         setIsLoading(false);
@@ -50,15 +46,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } else {
       // Email/password login
-      const response = await authApi.login(emailOrToken, passwordOrUser);
-      setToken(response.access_token);
+      await authApi.login(emailOrToken, passwordOrUser);
       await refreshUser();
     }
   };
 
   const register = async (email: string, password: string, name: string) => {
-    const response = await authApi.register(email, password, name);
-    setToken(response.access_token);
+    await authApi.register(email, password, name);
     await refreshUser();
   };
 

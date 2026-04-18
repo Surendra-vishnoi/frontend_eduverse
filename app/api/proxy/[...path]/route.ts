@@ -65,15 +65,10 @@ async function handleProxy(
   const searchParams = url.searchParams.toString();
   const targetUrl = `${API_BASE_URL}/${path}${searchParams ? `?${searchParams}` : ""}`;
 
-  // Get authorization header from request
-  const authHeader = request.headers.get("Authorization") || request.headers.get("authorization");
   const cookieHeader = request.headers.get("cookie");
 
   // Prepare headers
   const headers: Record<string, string> = {};
-  if (authHeader) {
-    headers["Authorization"] = authHeader;
-  }
   if (cookieHeader) {
     headers["Cookie"] = cookieHeader;
   }

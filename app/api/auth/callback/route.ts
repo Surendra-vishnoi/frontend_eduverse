@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Redirect browser to backend callback so backend session cookies are included.
-  // The backend then redirects to frontend /callback with tokens in fragment.
+  // Backend issues auth cookies and redirects back to frontend /callback.
   const backendCallbackUrl = new URL(`${BACKEND_URL}/auth/callback`);
   backendCallbackUrl.searchParams.set("code", code);
   backendCallbackUrl.searchParams.set("state", state);
