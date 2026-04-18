@@ -66,11 +66,15 @@ async function handleProxy(
   const targetUrl = `${API_BASE_URL}/${path}${searchParams ? `?${searchParams}` : ""}`;
 
   const cookieHeader = request.headers.get("cookie");
+  const csrfHeader = request.headers.get("X-CSRF-Token") || request.headers.get("x-csrf-token");
 
   // Prepare headers
   const headers: Record<string, string> = {};
   if (cookieHeader) {
     headers["Cookie"] = cookieHeader;
+  }
+  if (csrfHeader) {
+    headers["X-CSRF-Token"] = csrfHeader;
   }
   
   // Proxy Groq API Key if provided

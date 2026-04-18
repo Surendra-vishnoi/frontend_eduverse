@@ -2,6 +2,8 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "https://eduverse-4x8o.onrender.com";
 // Use proxy to avoid CORS issues
 const API_BASE_URL = typeof window !== "undefined" ? "/api/proxy" : BACKEND_URL;
+const CSRF_COOKIE_NAME = process.env.NEXT_PUBLIC_CSRF_COOKIE_NAME || "eduverse_csrf_token";
+const CSRF_HEADER_NAME = process.env.NEXT_PUBLIC_CSRF_HEADER_NAME || "X-CSRF-Token";
 
 // Types
 export interface User {
@@ -143,6 +145,33 @@ export class ApiRequestError extends Error {
     this.name = "ApiRequestError";
     this.status = status;
     this.endpoint = endpoint;
+  }
+}
+
+function getCookieValue(name: string): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const prefix = `${name}=`;
+  const cookies = document.cookie ? document.cookie.split("; ") : [];
+  for (const cookie of cookies) {
+    if (cookie.startsWith(prefix)) {
+      return decodeURIComponent(cookie.slice(prefix.length));
+    }
+  }
+  return null;
+}
+
+function addCsrfHeader(headers: Record<string, string>, method?: string): void {
+  const httpMethod = (method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS", "TRACE"].includes(httpMethod)) {
+    return;
+  }
+
+  const csrfToken = getCookieValue(CSRF_COOKIE_NAME);
+  if (csrfToken) {
+    headers[CSRF_HEADER_NAME] = csrfToken;
   }
 }
 
@@ -310,9 +339,13 @@ async function refreshAccessToken(): Promise<boolean> {
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
+        const headers: Record<string, string> = {};
+        addCsrfHeader(headers, "POST");
+
         const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
           method: "POST",
           credentials: "include",
+          headers,
         });
 
         return response.ok;
@@ -335,6 +368,7 @@ async function apiFetch<T>(
   retryOnAuthFailure = true
 ): Promise<T> {
   const headers: Record<string, string> = {};
+  addCsrfHeader(headers, options.method);
 
   if (includeGroqKey) {
     const groqKey = getGroqKey();
@@ -650,6 +684,7 @@ export const chatApi = {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
+      addCsrfHeader(headers, "POST");
 
       const groqKey = getGroqKey();
       if (groqKey) {
