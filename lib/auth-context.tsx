@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { authApi, User, getToken, setToken, removeToken } from "./api";
+import { authApi, User, setToken, removeToken } from "./api";
 
 interface AuthContextType {
   user: User | null;
@@ -20,13 +20,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const refreshUser = useCallback(async () => {
-    const token = getToken();
-    if (!token) {
-      setUser(null);
-      setIsLoading(false);
-      return;
-    }
-
     try {
       const userData = await authApi.getMe();
       setUser(userData);
@@ -46,7 +39,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Check if this is a token-based login (from OAuth callback)
     if (typeof passwordOrUser === "object" || passwordOrUser === null || passwordOrUser === undefined) {
       // Token-based login
-      setToken(emailOrToken);
+      if (emailOrToken.trim()) {
+        setToken(emailOrToken);
+      }
       if (passwordOrUser && typeof passwordOrUser === "object") {
         setUser(passwordOrUser as User);
         setIsLoading(false);
@@ -68,6 +63,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
+    void authApi.logout().catch(() => {
+      // Ignore network failures and clear client state anyway.
+    });
     removeToken();
     setUser(null);
   };

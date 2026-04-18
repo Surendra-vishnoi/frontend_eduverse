@@ -355,19 +355,18 @@ let refreshInFlight: Promise<boolean> | null = null;
 
 async function refreshAccessToken(): Promise<boolean> {
   const refreshToken = getRefreshToken();
-  if (!refreshToken) {
-    return false;
-  }
 
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
       try {
+        const refreshPayload = refreshToken ? { refresh_token: refreshToken } : {};
         const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ refresh_token: refreshToken }),
+          credentials: "include",
+          body: JSON.stringify(refreshPayload),
         });
 
         if (!response.ok) {
@@ -433,6 +432,7 @@ async function apiFetch<T>(
 
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
+    credentials: "include",
     headers: {
       ...headers,
       ...(options.headers as Record<string, string>),
@@ -493,10 +493,17 @@ export const authApi = {
   },
 
   // Refresh access token
-  refresh: async (refreshToken: string) => {
+  refresh: async (refreshToken?: string) => {
+    const payload = refreshToken ? { refresh_token: refreshToken } : {};
     return apiFetch<{ access_token: string; refresh_token: string }>("/auth/refresh", {
       method: "POST",
-      body: JSON.stringify({ refresh_token: refreshToken }),
+      body: JSON.stringify(payload),
+    });
+  },
+
+  logout: async () => {
+    return apiFetch<{ message: string }>("/auth/logout", {
+      method: "POST",
     });
   },
 
@@ -751,6 +758,7 @@ export const chatApi = {
         method: "POST",
         headers,
         body: JSON.stringify(payload),
+        credentials: "include",
         signal: callbacks?.signal,
       });
 

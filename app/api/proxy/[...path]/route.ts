@@ -5,6 +5,22 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL ||
   "https://eduverse-4x8o.onrender.com";
 
+function appendSetCookieHeaders(source: Headers, target: Headers) {
+  const sourceWithGetSetCookie = source as unknown as { getSetCookie?: () => string[] };
+  if (typeof sourceWithGetSetCookie.getSetCookie === "function") {
+    const setCookieValues = sourceWithGetSetCookie.getSetCookie();
+    for (const cookieValue of setCookieValues) {
+      target.append("set-cookie", cookieValue);
+    }
+    return;
+  }
+
+  const singleSetCookie = source.get("set-cookie");
+  if (singleSetCookie) {
+    target.append("set-cookie", singleSetCookie);
+  }
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -51,11 +67,15 @@ async function handleProxy(
 
   // Get authorization header from request
   const authHeader = request.headers.get("Authorization") || request.headers.get("authorization");
+  const cookieHeader = request.headers.get("cookie");
 
   // Prepare headers
   const headers: Record<string, string> = {};
   if (authHeader) {
     headers["Authorization"] = authHeader;
+  }
+  if (cookieHeader) {
+    headers["Cookie"] = cookieHeader;
   }
   
   // Proxy Groq API Key if provided
@@ -113,6 +133,7 @@ async function handleProxy(
       if (sessionId) {
         streamHeaders.set("X-Session-Id", sessionId);
       }
+      appendSetCookieHeaders(response.headers, streamHeaders);
 
       return new NextResponse(response.body, {
         status: response.status,
@@ -122,22 +143,29 @@ async function handleProxy(
     
     if (responseContentType?.includes("application/json")) {
       const data = await response.json();
-      return NextResponse.json(data, { status: response.status });
+      const jsonResponse = NextResponse.json(data, { status: response.status });
+      appendSetCookieHeaders(response.headers, jsonResponse.headers);
+      return jsonResponse;
     } else if (responseContentType?.includes("application/octet-stream") || 
                responseContentType?.includes("application/pdf") ||
                path.includes("download")) {
       // Handle file downloads
       const blob = await response.blob();
+      const downloadHeaders = new Headers({
+        "Content-Type": responseContentType || "application/octet-stream",
+        "Content-Disposition": response.headers.get("Content-Disposition") || "",
+      });
+      appendSetCookieHeaders(response.headers, downloadHeaders);
+
       return new NextResponse(blob, {
         status: response.status,
-        headers: {
-          "Content-Type": responseContentType || "application/octet-stream",
-          "Content-Disposition": response.headers.get("Content-Disposition") || "",
-        },
+        headers: downloadHeaders,
       });
     } else {
       const text = await response.text();
-      return new NextResponse(text, { status: response.status });
+      const textResponse = new NextResponse(text, { status: response.status });
+      appendSetCookieHeaders(response.headers, textResponse.headers);
+      return textResponse;
     }
   } catch (error) {
     console.error("[v0] Proxy error:", error);

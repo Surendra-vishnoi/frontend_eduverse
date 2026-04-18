@@ -3,10 +3,10 @@
 import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { setToken, setRefreshToken, type User } from "@/lib/api";
+import { authApi, setToken, setRefreshToken, type User } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "https://eduverse-4x8o.onrender.com";
+const API_PROXY_BASE = "/api/proxy";
 
 function CallbackHandler() {
   const router = useRouter();
@@ -15,6 +15,12 @@ function CallbackHandler() {
   const [error, setError] = useState<string | null>(null);
   const hasHandledCallback = useRef(false);
 
+  const finalizeSuccess = () => {
+    // Remove callback query/hash artifacts from browser history.
+    window.history.replaceState({}, document.title, window.location.pathname);
+    router.replace("/dashboard");
+  };
+
   const completeAuth = async (accessToken: string, refreshToken: string | null, user: User | null) => {
     setToken(accessToken);
     if (refreshToken) {
@@ -22,14 +28,17 @@ function CallbackHandler() {
     }
 
     await login(accessToken, user);
+    finalizeSuccess();
+  };
 
-    // Remove callback query/hash artifacts from browser history.
-    window.history.replaceState({}, document.title, window.location.pathname);
-    router.replace("/dashboard");
+  const completeCookieAuth = async () => {
+    const user = await authApi.getMe();
+    await login("", user);
+    finalizeSuccess();
   };
 
   const exchangeCodeForToken = async (code: string, state: string) => {
-    const callbackUrl = `${BACKEND_URL}/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}&response_mode=json`;
+    const callbackUrl = `${API_PROXY_BASE}/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}&response_mode=json`;
     const response = await fetch(callbackUrl, {
       method: "GET",
       credentials: "include",
@@ -79,6 +88,15 @@ function CallbackHandler() {
       if (errorParam) {
         setError(errorParam);
         return;
+      }
+
+      // Cookie-first path: if backend already issued HttpOnly cookies,
+      // use them and avoid relying on URL token fragments.
+      try {
+        await completeCookieAuth();
+        return;
+      } catch {
+        // Cookie session not ready; continue with legacy fallback flows.
       }
 
       if (accessToken) {
