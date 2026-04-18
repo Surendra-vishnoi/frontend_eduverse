@@ -7,9 +7,6 @@ const BACKEND_URL =
 
 const FRONTEND_CALLBACK_PATH = "/callback";
 const BACKEND_SESSION_COOKIE_NAME = process.env.BFF_BACKEND_SESSION_COOKIE_NAME || "session";
-const AUTH_COOKIE_ACCESS_NAME = process.env.AUTH_COOKIE_ACCESS_NAME || "eduverse_access_token";
-const AUTH_COOKIE_REFRESH_NAME = process.env.AUTH_COOKIE_REFRESH_NAME || "eduverse_refresh_token";
-const CSRF_COOKIE_NAME = process.env.NEXT_PUBLIC_CSRF_COOKIE_NAME || "eduverse_csrf_token";
 
 function getRequestOrigin(request: NextRequest): string {
   const forwardedHost = request.headers.get("x-forwarded-host");
@@ -27,28 +24,49 @@ function getSetCookieValues(headers: Headers): string[] {
   }
 
   const singleSetCookie = headers.get("set-cookie");
-  return singleSetCookie ? [singleSetCookie] : [];
-}
-
-function getCookieName(setCookieValue: string): string | null {
-  const pair = setCookieValue.split(";", 1)[0];
-  const index = pair.indexOf("=");
-  if (index <= 0) {
-    return null;
+  if (!singleSetCookie) {
+    return [];
   }
-  return pair.slice(0, index).trim();
+
+  // Fallback: split combined Set-Cookie header when getSetCookie is unavailable.
+  const parts: string[] = [];
+  let current = "";
+  let inExpires = false;
+
+  for (let index = 0; index < singleSetCookie.length; index += 1) {
+    const char = singleSetCookie[index];
+
+    if (singleSetCookie.slice(index, index + 8).toLowerCase() === "expires=") {
+      inExpires = true;
+    }
+
+    if (char === ";") {
+      inExpires = false;
+    }
+
+    if (char === "," && !inExpires) {
+      const remaining = singleSetCookie.slice(index + 1);
+      const looksLikeNextCookie = /^\s*[!#$%&'*+\-.^_`|~0-9A-Za-z]+=/.test(remaining);
+      if (looksLikeNextCookie) {
+        parts.push(current.trim());
+        current = "";
+        continue;
+      }
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
+  return parts;
 }
 
-function appendSelectedSetCookies(
-  sourceHeaders: Headers,
-  targetHeaders: Headers,
-  allowedCookieNames: Set<string>
-): void {
+function appendSetCookieHeaders(sourceHeaders: Headers, targetHeaders: Headers): void {
   for (const setCookieValue of getSetCookieValues(sourceHeaders)) {
-    const cookieName = getCookieName(setCookieValue);
-    if (cookieName && allowedCookieNames.has(cookieName)) {
-      targetHeaders.append("set-cookie", setCookieValue);
-    }
+    targetHeaders.append("set-cookie", setCookieValue);
   }
 }
 
@@ -128,11 +146,7 @@ export async function GET(request: NextRequest) {
     status: 303,
   });
 
-  appendSelectedSetCookies(
-    backendResponse.headers,
-    response.headers,
-    new Set([AUTH_COOKIE_ACCESS_NAME, AUTH_COOKIE_REFRESH_NAME, CSRF_COOKIE_NAME])
-  );
+  appendSetCookieHeaders(backendResponse.headers, response.headers);
 
   response.cookies.delete(BACKEND_SESSION_COOKIE_NAME);
   return response;
