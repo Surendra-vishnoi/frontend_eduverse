@@ -427,10 +427,7 @@ async function apiFetch<T>(
 export const authApi = {
   // Redirect to Google login
   googleLogin: () => {
-    const loginUrl = new URL(`${BACKEND_URL}/auth/login`);
-    loginUrl.searchParams.set("redirect", "true");
-    loginUrl.searchParams.set("frontend_redirect", `${window.location.origin}/callback`);
-    window.location.href = loginUrl.toString();
+    window.location.href = "/api/auth/login";
   },
 
   // Backend supports Google OAuth only.

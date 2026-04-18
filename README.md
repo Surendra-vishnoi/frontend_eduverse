@@ -81,8 +81,13 @@ Set values:
 
 - `NEXT_PUBLIC_BACKEND_URL`: backend URL for browser-side calls
 - `BACKEND_URL`: optional server-side override for Next route handlers
+- `BFF_BACKEND_SESSION_COOKIE_NAME` (optional): cookie name used for backend OAuth state handoff (`session` by default)
 
 If `BACKEND_URL` is not set, server handlers fall back to `NEXT_PUBLIC_BACKEND_URL`.
+
+Backend OAuth setting required for this flow:
+
+- `GOOGLE_REDIRECT_URI` must point to frontend callback route: `https://<frontend-domain>/api/auth/callback`
 
 ### Run
 
@@ -119,6 +124,10 @@ Open http://localhost:3000
   - exported domain APIs (`authApi`, `classroomApi`, `filesApi`, `indexingApi`, `chatApi`)
 - `lib/auth-context.tsx`
   - auth provider and user session hydration
+- `app/api/auth/login/route.ts`
+  - starts OAuth via backend and stores backend OAuth session cookie on frontend origin
+- `app/api/auth/callback/route.ts`
+  - exchanges Google callback code with backend server-side and relays auth cookies
 - `app/api/proxy/[...path]/route.ts`
   - backend proxy route that forwards cookies, CSRF header, and backend `Set-Cookie`
 - `next.config.mjs`
@@ -128,8 +137,10 @@ Open http://localhost:3000
 
 This frontend triggers login and completes callback state, but credential authority is backend-owned.
 
-- Frontend initiates redirect to backend `/auth/login`
+- Frontend starts OAuth at `/api/auth/login`
+- Frontend callback route `/api/auth/callback` calls backend `/auth/callback` server-side
 - Backend callback sets HttpOnly auth cookies (`access` + `refresh`) and a readable CSRF cookie
+- Frontend callback route relays those cookies back on frontend origin
 - Frontend completes sign-in by calling `/auth/me` and hydrating user context
 - Frontend sends cookie credentials on all API calls
 - Frontend sends `X-CSRF-Token` (from CSRF cookie) on `POST`, `PUT`, `PATCH`, `DELETE`
@@ -144,6 +155,7 @@ This frontend triggers login and completes callback state, but credential author
 
 For successful integration with backend deployment:
 - Keep `NEXT_PUBLIC_BACKEND_URL` and `BACKEND_URL` aligned to the same backend origin.
+- Configure backend `GOOGLE_REDIRECT_URI` as `https://<frontend-domain>/api/auth/callback`.
 - Ensure backend `BACKEND_CORS_ORIGINS` includes your frontend domain.
 - Use HTTPS in production so secure cookies are consistently set and sent.
 
