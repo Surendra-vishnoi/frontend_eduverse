@@ -2,6 +2,8 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "https://eduverse-4x8o.onrender.com";
 // Use proxy to avoid CORS issues
 const API_BASE_URL = typeof window !== "undefined" ? "/api/proxy" : BACKEND_URL;
+const LEGACY_BEARER_FALLBACK_ENABLED =
+  (process.env.NEXT_PUBLIC_AUTH_BEARER_FALLBACK_ENABLED || "false").toLowerCase() === "true";
 
 // Types
 export interface User {
@@ -284,14 +286,14 @@ function mapChatRole(role: string): "user" | "assistant" {
 
 // Token management
 export function getToken(): string | null {
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
     return normalizeToken(localStorage.getItem("eduverse_token"));
   }
   return null;
 }
 
 export function setToken(token: string): void {
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
     const normalizedToken = normalizeToken(token);
     if (normalizedToken) {
       localStorage.setItem("eduverse_token", normalizedToken);
@@ -300,14 +302,14 @@ export function setToken(token: string): void {
 }
 
 export function getRefreshToken(): string | null {
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
     return normalizeToken(localStorage.getItem("eduverse_refresh_token"));
   }
   return null;
 }
 
 export function setRefreshToken(token: string): void {
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && LEGACY_BEARER_FALLBACK_ENABLED) {
     const normalizedToken = normalizeToken(token);
     if (normalizedToken) {
       localStorage.setItem("eduverse_refresh_token", normalizedToken);
@@ -319,7 +321,6 @@ export function removeToken(): void {
   if (typeof window !== "undefined") {
     localStorage.removeItem("eduverse_token");
     localStorage.removeItem("eduverse_refresh_token");
-    localStorage.removeItem("eduverse_groq_key");
   }
 }
 

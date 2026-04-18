@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { authApi, setToken, setRefreshToken, type User } from "@/lib/api";
+import { authApi, removeToken, setToken, setRefreshToken, type User } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 
 const API_PROXY_BASE = "/api/proxy";
+const LEGACY_FRAGMENT_FALLBACK_ENABLED =
+  (process.env.NEXT_PUBLIC_AUTH_FRAGMENT_FALLBACK_ENABLED || "false").toLowerCase() === "true";
 
 function CallbackHandler() {
   const router = useRouter();
@@ -33,6 +35,7 @@ function CallbackHandler() {
 
   const completeCookieAuth = async () => {
     const user = await authApi.getMe();
+    removeToken();
     await login("", user);
     finalizeSuccess();
   };
@@ -75,15 +78,19 @@ function CallbackHandler() {
     hasHandledCallback.current = true;
 
     const handleCallback = async () => {
-      // Preferred flow: backend redirects to frontend with token fragment.
-      const hash = window.location.hash.replace(/^#/, "");
+      const hash = LEGACY_FRAGMENT_FALLBACK_ENABLED ? window.location.hash.replace(/^#/, "") : "";
       const hashParams = new URLSearchParams(hash);
 
-      // Accept token payload from either hash or query.
-      const accessToken = searchParams.get("access_token") || hashParams.get("access_token");
-      const refreshToken = searchParams.get("refresh_token") || hashParams.get("refresh_token");
-      const userParam = searchParams.get("user") || hashParams.get("user");
-      const errorParam = searchParams.get("error") || hashParams.get("error");
+      const accessToken = LEGACY_FRAGMENT_FALLBACK_ENABLED
+        ? searchParams.get("access_token") || hashParams.get("access_token")
+        : null;
+      const refreshToken = LEGACY_FRAGMENT_FALLBACK_ENABLED
+        ? searchParams.get("refresh_token") || hashParams.get("refresh_token")
+        : null;
+      const userParam = LEGACY_FRAGMENT_FALLBACK_ENABLED
+        ? searchParams.get("user") || hashParams.get("user")
+        : null;
+      const errorParam = searchParams.get("error") || (LEGACY_FRAGMENT_FALLBACK_ENABLED ? hashParams.get("error") : null);
 
       if (errorParam) {
         setError(errorParam);
@@ -99,7 +106,7 @@ function CallbackHandler() {
         // Cookie session not ready; continue with legacy fallback flows.
       }
 
-      if (accessToken) {
+      if (LEGACY_FRAGMENT_FALLBACK_ENABLED && accessToken) {
         try {
           let user = null;
           if (userParam) {
@@ -114,17 +121,19 @@ function CallbackHandler() {
         return;
       }
 
-      // Legacy fallback: if callback has code/state, exchange for tokens.
-      const code = searchParams.get("code");
-      const state = searchParams.get("state");
-      if (code && state) {
-        try {
-          await exchangeCodeForToken(code, state);
-        } catch (err) {
-          console.error("Error exchanging code for token:", err);
-          setError(err instanceof Error ? err.message : "Failed to complete authentication");
+      if (LEGACY_FRAGMENT_FALLBACK_ENABLED) {
+        // Legacy fallback: if callback has code/state, exchange for tokens.
+        const code = searchParams.get("code");
+        const state = searchParams.get("state");
+        if (code && state) {
+          try {
+            await exchangeCodeForToken(code, state);
+          } catch (err) {
+            console.error("Error exchanging code for token:", err);
+            setError(err instanceof Error ? err.message : "Failed to complete authentication");
+          }
+          return;
         }
-        return;
       }
 
       setError("No authentication token received. Please try logging in again.");
