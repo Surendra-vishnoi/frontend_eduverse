@@ -36,22 +36,22 @@ This project owns UI and client orchestration. It does not own backend business 
 Owned here:
 
 - routing, pages, and layouts
-- local auth/token state management
+- cookie-session orchestration and auth state hydration
 - API client wrappers and request retry behavior
 - optimistic and cached UI state for classrooms/files/chat
 
 Owned by backend:
 
 - Google OAuth token exchange and validation
-- JWT issuance and refresh policy
+- JWT issuance and cookie refresh policy
 - database persistence
 - indexing pipeline and retrieval logic
 
 ## Architecture Summary
 
 1. Browser UI calls frontend API utilities in `lib/api.ts`.
-2. Browser requests go to Next proxy route `/api/proxy/*`.
-3. Proxy forwards to backend URL from env.
+2. Browser requests go to Next proxy route `/api/proxy/*` with `credentials: include`.
+3. Proxy forwards cookies (and CSRF header when present) to backend URL from env.
 4. Backend handles auth, classroom sync, indexing, and chat inference.
 5. Frontend renders and updates state from backend responses.
 
@@ -114,21 +114,38 @@ Open http://localhost:3000
 
 - `lib/api.ts`
   - typed API client
-  - token helpers and refresh-on-401 behavior
+  - cookie-based request flow and refresh-on-401 behavior
+  - CSRF header injection for mutating requests
   - exported domain APIs (`authApi`, `classroomApi`, `filesApi`, `indexingApi`, `chatApi`)
 - `lib/auth-context.tsx`
   - auth provider and user session hydration
 - `app/api/proxy/[...path]/route.ts`
-  - backend proxy route for browser requests
+  - backend proxy route that forwards cookies, CSRF header, and backend `Set-Cookie`
+- `next.config.mjs`
+  - CSP and baseline browser security headers
 
 ## Auth Handling in This Frontend
 
-This frontend triggers login and processes callback state, but credential authority is backend-owned.
+This frontend triggers login and completes callback state, but credential authority is backend-owned.
 
 - Frontend initiates redirect to backend `/auth/login`
-- Frontend stores backend-issued access/refresh tokens in local storage
-- Frontend sends `Authorization` header on API calls
-- Frontend attempts backend `/auth/refresh` when access token expires
+- Backend callback sets HttpOnly auth cookies (`access` + `refresh`) and a readable CSRF cookie
+- Frontend completes sign-in by calling `/auth/me` and hydrating user context
+- Frontend sends cookie credentials on all API calls
+- Frontend sends `X-CSRF-Token` (from CSRF cookie) on `POST`, `PUT`, `PATCH`, `DELETE`
+- Frontend attempts backend `/auth/refresh` on `401` and retries once
+
+## Security Integration Notes
+
+- Authentication is cookie-only for browser flows (no bearer token persistence for auth).
+- Session continuity relies on backend-set cookies and proxy `Set-Cookie` forwarding.
+- CSRF uses double-submit token enforcement with `X-CSRF-Token`.
+- Global headers are set via Next config (CSP, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`).
+
+For successful integration with backend deployment:
+- Keep `NEXT_PUBLIC_BACKEND_URL` and `BACKEND_URL` aligned to the same backend origin.
+- Ensure backend `BACKEND_CORS_ORIGINS` includes your frontend domain.
+- Use HTTPS in production so secure cookies are consistently set and sent.
 
 ## Project Structure
 
