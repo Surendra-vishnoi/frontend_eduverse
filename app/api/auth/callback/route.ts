@@ -7,6 +7,9 @@ const BACKEND_URL =
 
 const FRONTEND_CALLBACK_PATH = "/callback";
 const BACKEND_SESSION_COOKIE_NAME = process.env.BFF_BACKEND_SESSION_COOKIE_NAME || "session";
+const AUTH_COOKIE_ACCESS_NAME = process.env.AUTH_COOKIE_ACCESS_NAME || "eduverse_access_token";
+const AUTH_COOKIE_REFRESH_NAME = process.env.AUTH_COOKIE_REFRESH_NAME || "eduverse_refresh_token";
+const CSRF_COOKIE_NAME = process.env.NEXT_PUBLIC_CSRF_COOKIE_NAME || "eduverse_csrf_token";
 
 function getRequestOrigin(request: NextRequest): string {
   const forwardedHost = request.headers.get("x-forwarded-host");
@@ -64,10 +67,101 @@ function getSetCookieValues(headers: Headers): string[] {
   return parts;
 }
 
-function appendSetCookieHeaders(sourceHeaders: Headers, targetHeaders: Headers): void {
-  for (const setCookieValue of getSetCookieValues(sourceHeaders)) {
-    targetHeaders.append("set-cookie", setCookieValue);
+type ParsedCookie = {
+  name: string;
+  value: string;
+  attributes: Record<string, string | boolean>;
+};
+
+function parseSetCookie(setCookieValue: string): ParsedCookie | null {
+  const segments = setCookieValue.split(";").map((segment) => segment.trim()).filter(Boolean);
+  if (segments.length === 0) {
+    return null;
   }
+
+  const nameValueIndex = segments[0].indexOf("=");
+  if (nameValueIndex <= 0) {
+    return null;
+  }
+
+  const name = segments[0].slice(0, nameValueIndex).trim();
+  const value = segments[0].slice(nameValueIndex + 1);
+  const attributes: Record<string, string | boolean> = {};
+
+  for (let index = 1; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const separatorIndex = segment.indexOf("=");
+    if (separatorIndex === -1) {
+      attributes[segment.toLowerCase()] = true;
+      continue;
+    }
+
+    const key = segment.slice(0, separatorIndex).trim().toLowerCase();
+    const attrValue = segment.slice(separatorIndex + 1).trim();
+    attributes[key] = attrValue;
+  }
+
+  return { name, value, attributes };
+}
+
+function parseSameSite(value: string | boolean | undefined): "lax" | "strict" | "none" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.toLowerCase();
+  if (normalized === "lax" || normalized === "strict" || normalized === "none") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function toPositiveNumber(value: string | boolean | undefined): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function applyAuthCookiesFromBackend(sourceHeaders: Headers, response: NextResponse): number {
+  const allowedCookieNames = new Set([
+    AUTH_COOKIE_ACCESS_NAME,
+    AUTH_COOKIE_REFRESH_NAME,
+    CSRF_COOKIE_NAME,
+  ]);
+
+  let appliedCount = 0;
+
+  for (const setCookieValue of getSetCookieValues(sourceHeaders)) {
+    const parsedCookie = parseSetCookie(setCookieValue);
+    if (!parsedCookie) {
+      continue;
+    }
+    if (!allowedCookieNames.has(parsedCookie.name)) {
+      continue;
+    }
+
+    const maxAge = toPositiveNumber(parsedCookie.attributes["max-age"]);
+    const expiresRaw = parsedCookie.attributes.expires;
+    const expiresDate = typeof expiresRaw === "string" ? new Date(expiresRaw) : undefined;
+
+    response.cookies.set({
+      name: parsedCookie.name,
+      value: parsedCookie.value,
+      path: typeof parsedCookie.attributes.path === "string" ? parsedCookie.attributes.path : "/",
+      httpOnly: Boolean(parsedCookie.attributes.httponly),
+      secure: Boolean(parsedCookie.attributes.secure),
+      sameSite: parseSameSite(parsedCookie.attributes.samesite),
+      maxAge,
+      expires: expiresDate,
+    });
+    appliedCount += 1;
+  }
+
+  return appliedCount;
 }
 
 function redirectWithError(origin: string, message: string): NextResponse {
@@ -146,7 +240,11 @@ export async function GET(request: NextRequest) {
     status: 303,
   });
 
-  appendSetCookieHeaders(backendResponse.headers, response.headers);
+  const appliedCookies = applyAuthCookiesFromBackend(backendResponse.headers, response);
+
+  if (appliedCookies === 0) {
+    return redirectWithError(origin, "Authentication cookies were not issued. Please try logging in again.");
+  }
 
   response.cookies.delete(BACKEND_SESSION_COOKIE_NAME);
   return response;
